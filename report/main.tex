@@ -1,0 +1,450 @@
+% !TEX TS-program = xelatex
+
+\documentclass[a4paper,14pt]{extarticle}
+\input{setting.tex}
+
+\geometry{a4paper, margin=1in}
+\graphicspath{{img/}}
+
+\newcommand{\assignNum}{Final Project}
+\author{Hassan}
+\newcommand{\SNum}{[Student ID]}
+\date{\today}
+\title{Machine Learning -- \assignNum}
+
+\begin{document}
+\pagenumbering{gobble}
+\maketitle
+\newpage
+\tableofcontents
+
+\newpage
+\listoftables
+
+\newpage
+\pagenumbering{arabic}
+
+
+\section*{Abstract}
+\addcontentsline{toc}{section}{Abstract}
+\noindent
+This report presents the complete implementation and analysis of a multilingual speech recognition pipeline for four languages: German, Italian, Spanish, and Korean. The work is organized into five phases required by the project: \textbf{(1) Data Cleaning}, \textbf{(2) Feature Extraction}, \textbf{(3) Classification}, \textbf{(4) Clustering}, and \textbf{(5) Metrics and Evaluation}. 
+
+In the data cleaning stage, raw audio files were standardized through resampling, silence trimming, and amplitude normalization to reduce variability caused by recording conditions and leading/trailing non-speech segments. In feature extraction, both spectral and time-domain descriptors were computed, including 13 MFCC coefficients and statistical summaries of spectral centroid, bandwidth, rolloff, zero-crossing rate, and RMS energy. 
+
+For supervised learning, three classifiers (K-Nearest Neighbors, Support Vector Machine, and Random Forest) were trained after standardization and PCA-based dimensionality reduction. The final evaluation shows strong performance for KNN and SVM, with KNN achieving the best test accuracy and macro F1 score. In unsupervised learning, K-Means and Agglomerative Clustering were compared using silhouette score and cluster purity. Although clustering partially captured language structure, overlap between acoustically similar languages limited cluster purity.
+
+Overall, results confirm that carefully engineered acoustic features can effectively support language identification in a classical machine learning setting, while clustering quality remains constrained by feature overlap and intrinsic inter-language similarity.
+\newpage
+
+\section{Project Overview}
+
+\subsection{Problem Definition}
+The objective is to build a multilingual speech analysis system that can:
+\begin{enumerate}
+    \item Prepare raw audio data for machine learning through robust preprocessing.
+    \item Convert variable-length waveforms into fixed-length numerical feature vectors.
+    \item Train supervised classifiers to predict language labels.
+    \item Apply unsupervised clustering to discover natural grouping in feature space.
+    \item Evaluate and interpret the quality of both classification and clustering.
+\end{enumerate}
+
+The dataset contains short audio clips extracted from audiobooks in four languages:
+\begin{itemize}
+    \item German
+    \item Italian
+    \item Spanish
+    \item Korean
+\end{itemize}
+
+\subsection{Pipeline Summary}
+The implemented pipeline is:
+\begin{enumerate}
+    \item \textbf{Data Cleaning} (resampling, silence trimming, normalization).
+    \item \textbf{Feature Extraction} (MFCC + spectral + energy/time-domain statistics).
+    \item \textbf{Classification} (KNN, SVM, Random Forest with scaled + PCA features).
+    \item \textbf{Clustering} (K-Means and Agglomerative).
+    \item \textbf{Evaluation} (accuracy, macro F1, confusion matrices, silhouette, purity).
+\end{enumerate}
+
+\subsection{Dataset Snapshot}
+After preprocessing and feature extraction, the final feature table has:
+\begin{itemize}
+    \item \textbf{712 samples}
+    \item \textbf{37 columns} (36 features + 1 language label)
+\end{itemize}
+
+Class distribution in \texttt{features.csv}:
+\begin{itemize}
+    \item German: 172
+    \item Italian: 180
+    \item Spanish: 180
+    \item Korean: 180
+\end{itemize}
+
+\newpage
+\section{Phase 1 -- Data Cleaning}
+
+\subsection{Motivation}
+Raw speech recordings are often inconsistent in sample rate, loudness, and silence length. If these factors are not handled, models may learn nuisance patterns (for example, recording artifacts) instead of language-dependent phonetic cues. The cleaning stage therefore focuses on making every sample more comparable before feature extraction.
+
+\subsection{Methods Used}
+The following operations were applied to each audio file:
+\begin{enumerate}
+    \item \textbf{Resampling to 22,050 Hz} using \texttt{librosa.load(..., sr=22050)}.\\
+    This ensures a common temporal resolution and frequency representation.
+    \item \textbf{Silence trimming} with \texttt{librosa.effects.trim(top\_db=20)}.\\
+    Leading and trailing low-energy regions were removed to concentrate on speech content.
+    \item \textbf{Amplitude normalization} by dividing the signal by its max absolute amplitude.\\
+    This reduces the impact of recording volume differences across files.
+\end{enumerate}
+
+Files that became too short after trimming (length less than one second) were skipped to avoid noisy or near-empty examples.
+
+\subsection{Why These Choices Are Appropriate}
+\begin{itemize}
+    \item \textbf{Resampling} makes feature extraction consistent and comparable.
+    \item \textbf{Silence trimming} improves signal-to-noise ratio and removes irrelevant frames.
+    \item \textbf{Normalization} prevents loudness from dominating distance-based models.
+    \item \textbf{Minimum-length filtering} prevents unstable feature vectors from extremely short clips.
+\end{itemize}
+
+\subsection{Data Cleaning Outcome}
+Initial processing attempted all language files (180 per class in raw folders). After cleaning and quality filtering:
+\begin{itemize}
+    \item German: 172 usable files
+    \item Italian: 180 usable files
+    \item Spanish: 180 usable files
+    \item Korean: 180 usable files
+\end{itemize}
+The minor reduction in German indicates that a subset of files became too short or invalid after trimming.
+
+\begin{figure}[h]
+    \centering
+    \fbox{\parbox{0.9\textwidth}{
+        \centering
+        Placeholder for preprocessing visualization.\\
+        Suggested content: before/after waveform example showing silence trimming and normalization.
+    }}
+    \caption{Data cleaning illustration (to be added).}
+    \label{fig:data_cleaning_placeholder}
+\end{figure}
+
+\newpage
+\section{Phase 2 -- Feature Extraction}
+
+\subsection{Motivation}
+Machine learning models require fixed-size numeric vectors, while speech signals are variable-length time series. Feature extraction transforms each audio clip into a compact descriptor that captures information related to articulation, spectral structure, and speech energy.
+
+\subsection{Extracted Feature Set}
+For each processed audio file, the following features were extracted:
+\begin{enumerate}
+    \item \textbf{MFCC (13 coefficients):} for each coefficient, mean and standard deviation were computed.\\
+    Contribution: \(13 \times 2 = 26\) features.
+    \item \textbf{Spectral Centroid:} mean and standard deviation.\\
+    Contribution: 2 features.
+    \item \textbf{Spectral Bandwidth:} mean and standard deviation.\\
+    Contribution: 2 features.
+    \item \textbf{Spectral Rolloff:} mean and standard deviation.\\
+    Contribution: 2 features.
+    \item \textbf{Zero Crossing Rate (ZCR):} mean and standard deviation.\\
+    Contribution: 2 features.
+    \item \textbf{RMS Energy:} mean and standard deviation.\\
+    Contribution: 2 features.
+\end{enumerate}
+
+Total: \(26 + 2 + 2 + 2 + 2 + 2 = 36\) numerical features per sample.
+
+\subsection{Rationale for Feature Selection}
+\begin{itemize}
+    \item \textbf{MFCCs} are the most established compact representation for speech timbre and vocal tract-related characteristics, often strongly informative for language identification.
+    \item \textbf{Spectral centroid/bandwidth/rolloff} summarize frequency distribution and can distinguish language-dependent phonetic texture.
+    \item \textbf{ZCR} captures temporal high-frequency activity, linked to unvoiced consonant behavior.
+    \item \textbf{RMS} provides robust loudness/energy profile statistics.
+    \item \textbf{Mean + Std pooling} produces fixed-size vectors while retaining first-order and dispersion information.
+\end{itemize}
+
+\subsection{Final Feature Table}
+The extracted dataset stored in \texttt{features.csv} has:
+\begin{itemize}
+    \item 712 rows (audio samples)
+    \item 37 columns (36 features + 1 language label)
+\end{itemize}
+
+\begin{table}[h]
+    \centering
+    \caption{Feature categories used in this project}
+    \begin{tabular}{|l|c|l|}
+        \hline
+        Feature Group & Count & Interpretation \\
+        \hline
+        MFCC mean/std (13 coeff.) & 26 & Speech spectral envelope and timbre \\
+        Spectral centroid mean/std & 2 & Center of mass of spectrum \\
+        Spectral bandwidth mean/std & 2 & Spread of spectral energy \\
+        Spectral rolloff mean/std & 2 & Frequency below most energy \\
+        Zero-crossing rate mean/std & 2 & Temporal sign-change rate \\
+        RMS energy mean/std & 2 & Signal energy profile \\
+        \hline
+        \textbf{Total} & \textbf{36} & \\
+        \hline
+    \end{tabular}
+    \label{tab:feature_summary}
+\end{table}
+
+\newpage
+\section{Phase 3 -- Classification}
+
+\subsection{Experimental Setup}
+The supervised classification stage used pre-split datasets:
+\begin{itemize}
+    \item Training set: \((520, 37)\)
+    \item Testing set: \((192, 37)\)
+\end{itemize}
+After separating labels, the model input dimension is 36 features.
+
+\subsection{Preprocessing for Classification}
+\begin{enumerate}
+    \item \textbf{Standardization} (\texttt{StandardScaler}) fitted only on training data to avoid data leakage.
+    \item \textbf{PCA} with \texttt{n\_components=0.85} to keep 85\% variance.\\
+    Result: dimensionality reduced from 36 to 9 components.
+\end{enumerate}
+
+\subsection{Chosen Models and Reasons}
+Three models were selected based on complementary inductive biases:
+\begin{itemize}
+    \item \textbf{K-Nearest Neighbors (KNN, \(k=5\)):}\\
+    Non-parametric, strong baseline for compact engineered feature spaces; captures local geometry.
+    \item \textbf{Support Vector Machine (RBF kernel, \(C=1.0\)):}\\
+    Effective for non-linear class boundaries and high-dimensional transformed spaces.
+    \item \textbf{Random Forest (\(n\_estimators=100\)):}\\
+    Tree ensemble robust to feature interactions and non-linearity; useful for comparison against distance- and margin-based methods.
+\end{itemize}
+
+\subsection{Classification Results}
+\begin{table}[h]
+    \centering
+    \caption{Test performance of classification models}
+    \begin{tabular}{|l|c|c|}
+        \hline
+        Model & Accuracy & Macro F1 \\
+        \hline
+        K-Nearest Neighbors & 0.9948 & 0.9946 \\
+        Support Vector Machine & 0.9896 & 0.9898 \\
+        Random Forest & 0.9531 & 0.9530 \\
+        \hline
+    \end{tabular}
+    \label{tab:classification_results}
+\end{table}
+
+\subsection{Interpretation}
+\begin{itemize}
+    \item \textbf{KNN} achieved the best overall score, indicating that classes are well-separated locally in PCA-transformed feature space.
+    \item \textbf{SVM} performed very close to KNN; margin-based separation is also highly effective in this dataset.
+    \item \textbf{Random Forest} performed lower, likely because axis-aligned splits in trees are less aligned with the geometric structure captured by scaled/PCA features.
+\end{itemize}
+
+\begin{figure}[h]
+    \centering
+    \fbox{\parbox{0.9\textwidth}{
+        \centering
+        Placeholder for model comparison plot.\\
+        Suggested content: bar chart of Accuracy and Macro F1 for KNN, SVM, and Random Forest.
+    }}
+    \caption{Classification model comparison (to be added).}
+    \label{fig:model_comparison_placeholder}
+\end{figure}
+
+\newpage
+\section{Phase 4 -- Clustering}
+
+\subsection{Objective}
+The clustering phase evaluates whether language structure emerges naturally without using labels during training. This helps assess the intrinsic separability of the feature representation.
+
+\subsection{Preprocessing for Clustering}
+Before clustering:
+\begin{itemize}
+    \item Features were standardized.
+    \item PCA was applied for variance-preserving compression.
+\end{itemize}
+
+From the notebook:
+\begin{itemize}
+    \item Original features: 36
+    \item PCA components for 95\% variance: 16
+    \item Total explained variance at 16 components: 0.9532
+\end{itemize}
+
+\subsection{Selecting the Number of Clusters}
+K-Means was first tested for \(k = 2\) to \(10\), with both inertia and silhouette reported. The highest silhouette appeared at \(k=10\) (\(0.3822\)), while \(k=4\) gave \(0.2733\). 
+
+Despite this, \(k=4\) was selected for final comparative analysis because the known number of languages is 4 and the project explicitly asks to compare discovered structure with true language count. This makes interpretation of cluster-language correspondence straightforward.
+
+\subsection{Algorithms}
+\begin{itemize}
+    \item \textbf{K-Means} with \(k=4\), \(n\_init=10\), random seed 42.
+    \item \textbf{Agglomerative Clustering} (Ward linkage) with \(k=4\).
+\end{itemize}
+
+\subsection{Clustering Scores}
+\begin{table}[h]
+    \centering
+    \caption{Silhouette score for final clustering setting (\(k=4\))}
+    \begin{tabular}{|l|c|}
+        \hline
+        Algorithm & Silhouette Score \\
+        \hline
+        K-Means & 0.2733 \\
+        Agglomerative (Ward) & 0.2547 \\
+        \hline
+    \end{tabular}
+    \label{tab:silhouette_results}
+\end{table}
+
+\subsection{Interpretation}
+Both algorithms show moderate clustering quality. K-Means slightly outperforms Agglomerative in silhouette score. This suggests that while the feature space contains language-related structure, clusters are not perfectly compact/separated for all classes.
+
+\begin{figure}[h]
+    \centering
+    \fbox{\parbox{0.9\textwidth}{
+        \centering
+        Placeholder for Elbow and Silhouette curves (\(k=2\) to \(10\)).\\
+        Suggested content: side-by-side line plots from clustering notebook.
+    }}
+    \caption{Cluster-number selection diagnostics (to be added).}
+    \label{fig:k_selection_placeholder}
+\end{figure}
+
+\begin{figure}[h]
+    \centering
+    \fbox{\parbox{0.9\textwidth}{
+        \centering
+        Placeholder for PCA/t-SNE 2D visualizations.\\
+        Suggested content: (1) true labels, (2) K-Means clusters, (3) Agglomerative clusters.
+    }}
+    \caption{2D clustering visualization (to be added).}
+    \label{fig:cluster_visualization_placeholder}
+\end{figure}
+
+\newpage
+\section{Phase 5 -- Metrics and Evaluation}
+
+\subsection{Classification Metrics}
+For each supervised model, the following were analyzed:
+\begin{itemize}
+    \item Accuracy
+    \item Precision, Recall, and F1-score (per class)
+    \item Macro average and weighted average F1
+    \item Confusion matrix
+\end{itemize}
+
+\subsubsection{Detailed Discussion}
+\textbf{KNN} and \textbf{SVM} achieved near-perfect performance across all four languages. Most confusion occurred in a small number of German/Italian/Korean border cases. \textbf{Spanish} was consistently recognized with very high precision and recall, indicating a relatively distinct acoustic signature in the selected feature set.
+
+\textbf{Random Forest} remained strong but showed more confusion between German and Italian, and minor degradation for Korean. This aligns with the lower macro F1 and suggests that tree partitions are less suited to the smooth class manifolds in reduced feature space.
+
+\begin{table}[h]
+    \centering
+    \caption{Per-class metrics from final evaluation notebook}
+    \begin{tabular}{|l|l|c|c|c|}
+        \hline
+        Model & Language & Precision & Recall & F1-score \\
+        \hline
+        KNN & German  & 1.00 & 0.98 & 0.99 \\
+        KNN & Italian & 0.98 & 1.00 & 0.99 \\
+        KNN & Korean  & 1.00 & 1.00 & 1.00 \\
+        KNN & Spanish & 1.00 & 1.00 & 1.00 \\
+        \hline
+        SVM & German  & 1.00 & 0.98 & 0.99 \\
+        SVM & Italian & 0.96 & 1.00 & 0.98 \\
+        SVM & Korean  & 1.00 & 0.98 & 0.99 \\
+        SVM & Spanish & 1.00 & 1.00 & 1.00 \\
+        \hline
+        RF & German  & 0.95 & 0.90 & 0.93 \\
+        RF & Italian & 0.89 & 0.98 & 0.93 \\
+        RF & Korean  & 0.98 & 0.94 & 0.96 \\
+        RF & Spanish & 1.00 & 0.98 & 0.99 \\
+        \hline
+    \end{tabular}
+    \label{tab:per_class_metrics}
+\end{table}
+
+\begin{figure}[h]
+    \centering
+    \fbox{\parbox{0.9\textwidth}{
+        \centering
+        Placeholder for confusion matrices.\\
+        Suggested content: confusion matrix for each classifier (KNN, SVM, RF).
+    }}
+    \caption{Classification confusion matrices (to be added).}
+    \label{fig:confusion_matrices_placeholder}
+\end{figure}
+
+\subsection{Clustering Metrics}
+Clustering quality was measured using:
+\begin{itemize}
+    \item Silhouette score
+    \item Cluster purity and cluster composition w.r.t. true language labels
+\end{itemize}
+
+Final purity results from evaluation:
+\begin{itemize}
+    \item K-Means overall purity: 0.6138
+    \item Agglomerative overall purity: 0.5899
+\end{itemize}
+
+\subsubsection{Cluster-Language Correspondence}
+Important observations:
+\begin{itemize}
+    \item One Spanish-dominant cluster is perfectly pure in both methods (purity \(=1.00\), \(n=90\)).
+    \item Other clusters mix German, Italian, and Korean to varying degrees.
+    \item K-Means obtains slightly better separation than Agglomerative under the same \(k=4\).
+\end{itemize}
+
+This indicates that the representation captures some language-specific structure, but not complete separation for all classes in unsupervised mode.
+
+\begin{figure}[h]
+    \centering
+    \fbox{\parbox{0.9\textwidth}{
+        \centering
+        Placeholder for cluster composition visualization.\\
+        Suggested content: stacked bar chart of language composition per cluster.
+    }}
+    \caption{Cluster composition and purity visualization (to be added).}
+    \label{fig:cluster_purity_placeholder}
+\end{figure}
+
+\newpage
+\section{Conclusion}
+This project successfully implemented an end-to-end multilingual speech pipeline from preprocessing to model evaluation. The key findings are:
+\begin{itemize}
+    \item Carefully designed data cleaning significantly improves consistency of the speech corpus.
+    \item A compact handcrafted feature set (MFCC + spectral/time-domain statistics) is highly effective for supervised language classification.
+    \item KNN and SVM provide excellent performance, both approaching 99\% accuracy and macro F1.
+    \item Unsupervised clustering reveals partial language structure, but full separation is limited, especially among German/Italian/Korean.
+    \item Evaluation with multiple complementary metrics (accuracy, F1, confusion matrix, silhouette, purity) gives a more reliable understanding than any single score.
+\end{itemize}
+
+\subsection*{Future Improvements}
+\addcontentsline{toc}{subsection}{Future Improvements}
+\begin{itemize}
+    \item Add temporal sequence features (delta/delta-delta MFCC, rhythm descriptors).
+    \item Perform model selection via cross-validation and systematic hyperparameter tuning.
+    \item Explore additional unsupervised methods (GMM, spectral clustering, HDBSCAN).
+    \item Investigate deep embeddings (e.g., wav2vec-like representations) for improved clustering separability.
+\end{itemize}
+
+\newpage
+
+\section{References}
+
+\begin{enumerate}
+    \item University of Tehran, Machine Learning Course (Fall 2025). \textit{Final Project Description: Multilingual Speech Processing}.
+    \item Pedregosa, F., et al. (2011). Scikit-learn: Machine Learning in Python. \textit{Journal of Machine Learning Research}, 12, 2825--2830.
+    \item McKinney, W. (2010). Data Structures for Statistical Computing in Python. \textit{Proceedings of the 9th Python in Science Conference}.
+    \item Harris, C. R., et al. (2020). Array Programming with NumPy. \textit{Nature}, 585, 357--362.
+    \item Hunter, J. D. (2007). Matplotlib: A 2D Graphics Environment. \textit{Computing in Science \& Engineering}, 9(3), 90--95.
+    \item Librosa Documentation. Available at: \url{https://librosa.org/doc/latest/index.html}.
+    \item Seaborn Documentation. Available at: \url{https://seaborn.pydata.org/}.
+\end{enumerate}
+
+\end{document}
